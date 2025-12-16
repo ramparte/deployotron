@@ -414,4 +414,223 @@ mod tests {
         let health2 = service.get_service_health("test-cluster", "test-service").await.unwrap();
         assert!(health2.running_count >= health1.running_count);
     }
+    
+    #[tokio::test]
+    async fn test_push_docker_image_requires_build() {
+        let service = create_test_service();
+        
+        // Try to push without building
+        let result = service.push_docker_image("unbuit-image:v1", "ecr-uri").await;
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Image not found"));
+    }
+    
+    #[tokio::test]
+    async fn test_push_docker_image_success() {
+        let service = create_test_service();
+        
+        // Build image first
+        let temp_dir = std::env::temp_dir().join("test_push");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        
+        service.build_docker_image(
+            temp_dir.to_str().unwrap(),
+            "test-app:v1",
+            &FrameworkType::React
+        ).await.unwrap();
+        
+        // Now push should succeed
+        let result = service.push_docker_image("test-app:v1", "ecr-uri:v1").await;
+        assert!(result.is_ok());
+        assert!(service.state.has_docker_image("ecr-uri:v1"));
+        
+        // Cleanup
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+    
+    #[tokio::test]
+    async fn test_failure_injection_ecr() {
+        let config = ShadowConfig {
+            enabled: true,
+            failure_rate: 1.0, // Always fail
+            simulate_delays: false,
+        };
+        let state = Arc::new(ShadowState::new());
+        let service = MockAwsService::new(Some("us-east-1".into()), config, state);
+        
+        let result = service.ensure_ecr_repository("test-repo").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Simulated failure"));
+    }
+    
+    #[tokio::test]
+    async fn test_failure_injection_docker_login() {
+        let config = ShadowConfig {
+            enabled: true,
+            failure_rate: 1.0,
+            simulate_delays: false,
+        };
+        let state = Arc::new(ShadowState::new());
+        let service = MockAwsService::new(Some("us-east-1".into()), config, state);
+        
+        let result = service.docker_login_ecr().await;
+        assert!(result.is_err());
+    }
+    
+    #[tokio::test]
+    async fn test_service_health_multiple_tasks() {
+        let service = create_test_service();
+        
+        let config = EcsDeploymentConfig {
+            cluster_name: "test-cluster".to_string(),
+            service_name: "test-service".to_string(),
+            task_family: "test-task".to_string(),
+            container_name: "test-container".to_string(),
+            image_uri: "test-image".to_string(),
+            cpu: "256".to_string(),
+            memory: "512".to_string(),
+            port: 3000,
+            desired_count: 3, // Multiple tasks
+        };
+        
+        service.deploy_service(&config, "arn:test").await.unwrap();
+        
+        // Poll until healthy
+        let mut attempts = 0;
+        let mut is_healthy = false;
+        while attempts < 10 {
+            let health = service.get_service_health("test-cluster", "test-service").await.unwrap();
+            if health.is_healthy {
+                is_healthy = true;
+                assert_eq!(health.running_count, 3);
+                assert_eq!(health.desired_count, 3);
+                break;
+            }
+            attempts += 1;
+        }
+        assert!(is_healthy);
+    }
+    
+    #[tokio::test]
+    async fn test_fetch_logs_creates_mock_logs() {
+        let service = create_test_service();
+        
+        // Fetch logs for non-existent stream - should create mock logs
+        let logs = service.fetch_logs("/ecs/test-task", "stream-1", 10).await.unwrap();
+        
+        assert!(!logs.is_empty());
+        assert!(logs.iter().any(|log| log.contains("Container started")));
+    }
+    
+    #[tokio::test]
+    async fn test_fetch_logs_returns_existing() {
+        let service = create_test_service();
+        
+        // Add custom logs
+        service.state.add_log("/ecs/my-task", "my-stream", "Custom log 1".to_string());
+        service.state.add_log("/ecs/my-task", "my-stream", "Custom log 2".to_string());
+        
+        let logs = service.fetch_logs("/ecs/my-task", "my-stream", 10).await.unwrap();
+        
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0], "Custom log 1");
+        assert_eq!(logs[1], "Custom log 2");
+    }
+    
+    #[tokio::test]
+    async fn test_ecr_repository_different_regions() {
+        let config = ShadowConfig {
+            enabled: true,
+            failure_rate: 0.0,
+            simulate_delays: false,
+        };
+        let state = Arc::new(ShadowState::new());
+        
+        // Test different regions
+        let service_us = MockAwsService::new(Some("us-west-2".into()), config.clone(), state.clone());
+        let service_eu = MockAwsService::new(Some("eu-west-1".into()), config, state);
+        
+        let uri_us = service_us.ensure_ecr_repository("test-repo").await.unwrap();
+        let uri_eu = service_eu.ensure_ecr_repository("test-repo-eu").await.unwrap();
+        
+        assert!(uri_us.contains("us-west-2"));
+        assert!(uri_eu.contains("eu-west-1"));
+    }
+    
+    #[tokio::test]
+    async fn test_dockerfile_generation_nextjs() {
+        let service = create_test_service();
+        let temp_dir = std::env::temp_dir().join("test_dockerfile_nextjs");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        
+        service.build_docker_image(
+            temp_dir.to_str().unwrap(),
+            "test:v1",
+            &FrameworkType::NextJs
+        ).await.unwrap();
+        
+        let dockerfile = std::fs::read_to_string(temp_dir.join("Dockerfile")).unwrap();
+        assert!(dockerfile.contains("Next.js"));
+        assert!(dockerfile.contains("node:18"));
+        
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+    
+    #[tokio::test]
+    async fn test_dockerfile_generation_python() {
+        let service = create_test_service();
+        let temp_dir = std::env::temp_dir().join("test_dockerfile_python");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        
+        service.build_docker_image(
+            temp_dir.to_str().unwrap(),
+            "test:v1",
+            &FrameworkType::Python
+        ).await.unwrap();
+        
+        let dockerfile = std::fs::read_to_string(temp_dir.join("Dockerfile")).unwrap();
+        assert!(dockerfile.contains("Python"));
+        assert!(dockerfile.contains("python:3.11"));
+        
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+    
+    #[tokio::test]
+    async fn test_task_definition_arn_format() {
+        let service = create_test_service();
+        
+        let config = EcsDeploymentConfig {
+            cluster_name: "prod-cluster".to_string(),
+            service_name: "prod-service".to_string(),
+            task_family: "my-app-task".to_string(),
+            container_name: "my-container".to_string(),
+            image_uri: "test-image".to_string(),
+            cpu: "512".to_string(),
+            memory: "1024".to_string(),
+            port: 8080,
+            desired_count: 2,
+        };
+        
+        let arn = service.register_task_definition(&config).await.unwrap();
+        
+        assert!(arn.starts_with("arn:aws:ecs:"));
+        assert!(arn.contains("my-app-task"));
+        assert!(arn.contains("us-east-1"));
+        assert!(service.state.get_task_definition("my-app-task").is_some());
+    }
+    
+    #[tokio::test]
+    async fn test_ecr_repository_idempotent() {
+        let service = create_test_service();
+        
+        // Call multiple times
+        let uri1 = service.ensure_ecr_repository("my-repo").await.unwrap();
+        let uri2 = service.ensure_ecr_repository("my-repo").await.unwrap();
+        let uri3 = service.ensure_ecr_repository("my-repo").await.unwrap();
+        
+        // Should return same URI
+        assert_eq!(uri1, uri2);
+        assert_eq!(uri2, uri3);
+    }
 }
