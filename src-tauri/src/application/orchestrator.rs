@@ -5,7 +5,7 @@
 
 use crate::infrastructure::Database;
 use crate::models::{Deployment, DeploymentStatus, Project};
-use crate::services::{AwsService, EcsDeploymentConfig, GitService, TerraformService, TerraformConfig};
+use crate::services::{AwsOperations, AwsService, EcsDeploymentConfig, GitOperations, TerraformService, TerraformConfig};
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use tauri::Window;
@@ -42,8 +42,8 @@ struct ProgressEvent {
 /// Deployment orchestrator that coordinates the full workflow
 pub struct DeploymentOrchestrator {
     database: Arc<Mutex<Database>>,
-    git_service: Arc<GitService>,
-    aws_service: Arc<AwsService>,
+    git_service: Arc<dyn GitOperations>,
+    aws_service: Arc<dyn AwsOperations>,
     terraform_service: Arc<TerraformService>,
     window: Window,
 }
@@ -52,8 +52,8 @@ impl DeploymentOrchestrator {
     /// Create a new deployment orchestrator
     pub fn new(
         database: Arc<Mutex<Database>>,
-        git_service: Arc<GitService>,
-        aws_service: Arc<AwsService>,
+        git_service: Arc<dyn GitOperations>,
+        aws_service: Arc<dyn AwsOperations>,
         terraform_service: Arc<TerraformService>,
         window: Window,
     ) -> Self {

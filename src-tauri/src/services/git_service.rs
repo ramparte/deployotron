@@ -6,9 +6,12 @@
 //! - Retrieving commit information
 
 use crate::models::FrameworkType;
+use crate::services::GitOperations;
+use crate::services::git_trait::CommitInfo;
 use git2::{Repository, Oid, Commit};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use async_trait::async_trait;
 use std::fs;
 
 /// Git service specific errors
@@ -47,15 +50,6 @@ impl From<std::io::Error> for GitServiceError {
 
 /// Git service for repository operations
 pub struct GitService;
-
-/// Information about a git commit
-#[derive(Debug, Clone)]
-pub struct CommitInfo {
-    pub sha: String,
-    pub message: String,
-    pub author: String,
-    pub timestamp: i64,
-}
 
 impl GitService {
     /// Create a new GitService instance
@@ -245,6 +239,34 @@ impl GitService {
 impl Default for GitService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// Implement GitOperations trait for GitService
+#[async_trait]
+impl GitOperations for GitService {
+    async fn clone_repository(&self, repo_url: &str, branch: &str) -> Result<PathBuf, GitServiceError> {
+        self.clone_repository(repo_url, branch).await
+    }
+    
+    async fn detect_framework(&self, repo_path: &Path) -> Result<FrameworkType, GitServiceError> {
+        self.detect_framework(repo_path).await
+    }
+    
+    async fn get_commit_info(
+        &self,
+        repo_path: &Path,
+        commit_sha: Option<&str>
+    ) -> Result<CommitInfo, GitServiceError> {
+        self.get_commit_info(repo_path, commit_sha).await
+    }
+    
+    async fn get_latest_commit_sha(&self, repo_path: &Path) -> Result<String, GitServiceError> {
+        self.get_latest_commit_sha(repo_path).await
+    }
+    
+    async fn cleanup_repository(&self, repo_path: &Path) -> Result<(), GitServiceError> {
+        self.cleanup_repository(repo_path).await
     }
 }
 

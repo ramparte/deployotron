@@ -13,9 +13,10 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_ecr::{Client as EcrClient, types::ImageIdentifier};
 use aws_sdk_ecs::{Client as EcsClient, types::{TaskDefinition, ContainerDefinition, PortMapping, LogConfiguration}};
 use aws_sdk_cloudwatchlogs::{Client as CloudWatchClient};
-use tokio::process::Command;
 use thiserror::Error;
+use async_trait::async_trait;
 use crate::models::FrameworkType;
+use crate::services::AwsOperations;
 
 /// AWS service specific errors
 #[derive(Error, Debug)]
@@ -436,6 +437,60 @@ CMD ["python", "main.py"]
             FrameworkType::Rust => 8080,
             _ => 8080,
         }
+    }
+}
+
+// Implement AwsOperations trait for AwsService
+#[async_trait]
+impl AwsOperations for AwsService {
+    async fn ensure_ecr_repository(&self, repository_name: &str) -> Result<String, AwsServiceError> {
+        self.ensure_ecr_repository(repository_name).await
+    }
+    
+    async fn docker_login_ecr(&self) -> Result<(), AwsServiceError> {
+        self.docker_login_ecr().await
+    }
+    
+    async fn build_docker_image(
+        &self,
+        source_dir: &str,
+        image_tag: &str,
+        framework: &FrameworkType
+    ) -> Result<(), AwsServiceError> {
+        self.build_docker_image(source_dir, image_tag, framework).await
+    }
+    
+    async fn push_docker_image(&self, local_tag: &str, ecr_uri: &str) -> Result<(), AwsServiceError> {
+        self.push_docker_image(local_tag, ecr_uri).await
+    }
+    
+    async fn register_task_definition(&self, config: &EcsDeploymentConfig) -> Result<String, AwsServiceError> {
+        self.register_task_definition(config).await
+    }
+    
+    async fn deploy_service(
+        &self,
+        config: &EcsDeploymentConfig,
+        task_definition_arn: &str
+    ) -> Result<(), AwsServiceError> {
+        self.deploy_service(config, task_definition_arn).await
+    }
+    
+    async fn get_service_health(
+        &self,
+        cluster_name: &str,
+        service_name: &str
+    ) -> Result<ServiceHealth, AwsServiceError> {
+        self.get_service_health(cluster_name, service_name).await
+    }
+    
+    async fn fetch_logs(
+        &self,
+        log_group: &str,
+        log_stream: &str,
+        limit: i32
+    ) -> Result<Vec<String>, AwsServiceError> {
+        self.fetch_logs(log_group, log_stream, limit).await
     }
 }
 

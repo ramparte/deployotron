@@ -5,6 +5,7 @@ mod models;
 mod infrastructure;
 mod services;
 mod application;
+mod shadow;
 
 use application::commands::*;
 
